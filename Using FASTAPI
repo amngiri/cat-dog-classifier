@@ -1,0 +1,56 @@
+from fastapi import FastAPI, File, UploadFile, Request, Form
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+import uvicorn
+import tensorflow as tf
+from tensorflow.keras.models import load_model
+import numpy as np
+import cv2
+import os
+from io import BytesIO
+
+app = FastAPI()
+templates = Jinja2Templates(directory="templates")
+
+model_file = "catdogclassifier.h5"
+if os.path.exists(model_file):
+    model = load_model(model_file)
+else:
+    print(f"Error: Model file '{model_file}' not found.")
+    model = None
+
+def predict_image(image, threshold_low=0.3, threshold_high=0.8):
+    if model is None:
+        return {"error": "Model not loaded"}
+
+    image = cv2.resize(image, (256, 256))
+    image = np.array(image) / 255.0
+    image = np.expand_dims(image, axis=0)
+
+    prediction = model.predict(image)
+    pred_value = prediction[0][0]
+
+    if pred_value > threshold_high:
+        return {"class": "Dog", "confidence": float(pred_value)}
+    elif pred_value < threshold_low:
+        return {"class": "Cat", "confidence": float(1 - pred_value)}
+    else:
+        return {"class": "Neither", "confidence": float(pred_value)}
+
+@app.get("/", response_class=HTMLResponse)
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.post("/predict", response_class=HTMLResponse)
+async def predict(request: Request, file: UploadFile = File(...)):
+    contents = await file.read()
+    image_np = np.frombuffer(contents, np.uint8)
+    image = cv2.imdecode(image_np, cv2.IMREAD_COLOR)
+
+    if image is None:
+        return templates.TemplateResponse("result.html", {"request": request, "result": {"error": "Invalid image file"}})
+
+    result = predict_image(image)
+    return templates.TemplateResponse("result.html", {"request": request, "result": result})
+
